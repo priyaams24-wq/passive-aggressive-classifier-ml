@@ -24,8 +24,9 @@ def load_heart_data():
         # Replace '?' with NaN and drop rows with missing values
         df.replace('?', np.nan, inplace=True)
         df.dropna(inplace=True)
-        # Ensure target is binary (0 = no disease, 1 = disease)
-        df['target'] = df['target'].astype(int)
+        # Convert all columns to numeric
+        df = df.apply(pd.to_numeric)
+        # Binary target: 0 = no disease, 1 = disease
         df['target'] = df['target'].apply(lambda x: 0 if x == 0 else 1)
         return df
     except Exception as e:
@@ -142,12 +143,10 @@ st.title("✨ ML Model Comparison Tool")
 dataset_choice = st.sidebar.radio("Select Dataset", ["Iris", "Wine", "Heart Disease"])
 
 if dataset_choice == "Iris":
-    from sklearn.datasets import load_iris
     data = load_iris(as_frame=True)
     df = pd.concat([data.data, data.target.rename("target")], axis=1)
     target_column = "target"
 elif dataset_choice == "Wine":
-    from sklearn.datasets import load_wine
     data = load_wine(as_frame=True)
     df = pd.concat([data.data, data.target.rename("target")], axis=1)
     target_column = "target"
@@ -165,6 +164,26 @@ if st.sidebar.button("🚀 Run Analysis"):
     metrics_df, plots, feature_plots, roc_plots, summary, metrics_bar_fig = run_analysis(df, target_column, selected_models)
     if metrics_df is not None:
         st.success(summary)
-        st.dataframe(df.head())
-        st.dataframe(metrics_df)
-        st.plotly_chart(metrics_bar_fig)
+
+        with st.expander("📊 Dataset Preview"):
+            st.dataframe(df.head())
+
+        with st.expander("📈 Model Performance Metrics", expanded=True):
+            st.dataframe(metrics_df)
+            st.plotly_chart(metrics_bar_fig, use_container_width=True)
+
+        with st.expander("🧩 Confusion Matrices", expanded=True):
+            cols = st.columns(2)
+            for i, (name, fig) in enumerate(plots.items()):
+                if fig:
+                    cols[i % 2].plotly_chart(fig, use_container_width=True)
+
+        with st.expander("🌟 Feature Importance (Random Forest)"):
+            for fig in feature_plots.values():
+                if fig:
+                    st.plotly_chart(fig, use_container_width=True)
+
+        if roc_plots:
+            with st.expander("📊 ROC Curves (Binary Classification)", expanded=True):
+                for fig in roc_plots.values():
+                    st.plotly_chart(fig, use_container_width=True)
