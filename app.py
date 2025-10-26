@@ -11,29 +11,26 @@ from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_sc
 from sklearn.datasets import load_iris, load_wine
 import plotly.express as px
 import plotly.graph_objects as go
-from sklearn.preprocessing import label_binarize
 
 # --- Helper Functions ---
-
-def load_dataset_from_url(url):
+def load_heart_data():
+    url = "https://archive.ics.uci.edu/ml/machine-learning-databases/heart-disease/processed.cleveland.data"
     try:
-        response = requests.get(url)
-        response.raise_for_status()  # Check if the request was successful
-        data = response.text
-        # Replace missing values represented by '?' with NaN
-        data = data.replace('?', 'NaN')
-        # Load the dataset into a pandas DataFrame
-        df = pd.read_csv(StringIO(data), header=None)
-        # Assign column names based on the dataset's attribute information
+        df = pd.read_csv(url, header=None)
         df.columns = [
             'age', 'sex', 'cp', 'trestbps', 'chol', 'fbs', 'restecg', 'thalach',
             'exang', 'oldpeak', 'slope', 'ca', 'thal', 'target'
         ]
+        # Replace '?' with NaN and drop rows with missing values
+        df.replace('?', np.nan, inplace=True)
+        df.dropna(inplace=True)
+        # Ensure target is binary (0 = no disease, 1 = disease)
+        df['target'] = df['target'].astype(int)
+        df['target'] = df['target'].apply(lambda x: 0 if x == 0 else 1)
         return df
-    except requests.exceptions.RequestException as e:
-        print(f"Error loading dataset: {e}")
+    except Exception as e:
+        st.error(f"Failed to load Heart Disease dataset: {e}")
         return None
-
 
 def plot_confusion_matrix(cm, labels, model_name):
     fig = px.imshow(
@@ -76,13 +73,14 @@ def plot_roc_curve(model, X_test, y_test, model_name):
 
 # --- Main Analysis Function ---
 def run_analysis(df, target_column, selected_models):
+    if df is None or target_column not in df.columns:
+        st.error(f"Dataset or target column '{target_column}' is invalid.")
+        return None, None, None, None, None, None
+
     X = df.drop(columns=[target_column])
     y = df[target_column]
 
-    # Encode categorical variables
     X = pd.get_dummies(X, drop_first=True)
-
-    # Split the data
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
     )
@@ -111,13 +109,8 @@ def run_analysis(df, target_column, selected_models):
             f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)
 
             performance_data.append(
-                {
-                    "Model": name,
-                    "Accuracy": round(accuracy, 4),
-                    "Precision": round(precision, 4),
-                    "Recall": round(recall, 4),
-                    "F1-Score": round(f1, 4),
-                }
+                {"Model": name, "Accuracy": round(accuracy,4), "Precision": round(precision,4),
+                 "Recall": round(recall,4), "F1-Score": round(f1,4)}
             )
 
             cm = confusion_matrix(y_test, y_pred, labels=np.unique(y))
@@ -144,15 +137,9 @@ def run_analysis(df, target_column, selected_models):
 
 # --- Streamlit Layout ---
 st.set_page_config(page_title="ML Model Comparison", layout="wide")
-st.title("✨ Machine Learning Model Comparison Tool")
-st.markdown("Compare multiple classification models with rich visualizations.")
+st.title("✨ ML Model Comparison Tool")
 
-# Sidebar
-st.sidebar.header("⚙️ Configuration")
-dataset_choice = st.sidebar.radio(
-    "Select Dataset",
-    ["Iris", "Wine", "Heart Disease"]
-)
+dataset_choice = st.sidebar.radio("Select Dataset", ["Iris", "Wine", "Heart Disease"])
 
 if dataset_choice == "Iris":
     from sklearn.datasets import load_iris
@@ -165,8 +152,7 @@ elif dataset_choice == "Wine":
     df = pd.concat([data.data, data.target.rename("target")], axis=1)
     target_column = "target"
 elif dataset_choice == "Heart Disease":
-    heart_url = "https://raw.githubusercontent.com/rahulmidha/Heart-Disease-UCI-Dataset/main/heart.csv"
-    df = load_dataset_from_url(heart_url)
+    df = load_heart_data()
     target_column = "target"
 
 selected_models = st.sidebar.multiselect(
@@ -177,28 +163,8 @@ selected_models = st.sidebar.multiselect(
 
 if st.sidebar.button("🚀 Run Analysis"):
     metrics_df, plots, feature_plots, roc_plots, summary, metrics_bar_fig = run_analysis(df, target_column, selected_models)
-    
-    st.success(summary)
-
-    with st.expander("📊 Dataset Preview"):
+    if metrics_df is not None:
+        st.success(summary)
         st.dataframe(df.head())
-
-    with st.expander("📈 Model Performance Metrics", expanded=True):
         st.dataframe(metrics_df)
-        st.plotly_chart(metrics_bar_fig, use_container_width=True)
-
-    with st.expander("🧩 Confusion Matrices", expanded=True):
-        cols = st.columns(2)
-        for i, (name, fig) in enumerate(plots.items()):
-            if fig:
-                cols[i % 2].plotly_chart(fig, use_container_width=True)
-
-    with st.expander("🌟 Feature Importance (Random Forest)"):
-        for fig in feature_plots.values():
-            if fig:
-                st.plotly_chart(fig, use_container_width=True)
-
-    if roc_plots:
-        with st.expander("📊 ROC Curves (Binary Classification)", expanded=True):
-            for fig in roc_plots.values():
-                st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(metrics_bar_fig)
