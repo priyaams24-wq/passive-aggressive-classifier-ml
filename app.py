@@ -14,13 +14,26 @@ import plotly.graph_objects as go
 from sklearn.preprocessing import label_binarize
 
 # --- Helper Functions ---
+
 def load_dataset_from_url(url):
-    response = requests.get(url)
-    if response.status_code == 200:
-        return pd.read_csv(StringIO(response.text))
-    else:
-        st.error(f"Failed to download dataset from {url}")
+    try:
+        response = requests.get(url)
+        response.raise_for_status()  # Check if the request was successful
+        data = response.text
+        # Replace missing values represented by '?' with NaN
+        data = data.replace('?', 'NaN')
+        # Load the dataset into a pandas DataFrame
+        df = pd.read_csv(StringIO(data), header=None)
+        # Assign column names based on the dataset's attribute information
+        df.columns = [
+            'age', 'sex', 'cp', 'trestbps', 'chol', 'fbs', 'restecg', 'thalach',
+            'exang', 'oldpeak', 'slope', 'ca', 'thal', 'target'
+        ]
+        return df
+    except requests.exceptions.RequestException as e:
+        print(f"Error loading dataset: {e}")
         return None
+
 
 def plot_confusion_matrix(cm, labels, model_name):
     fig = px.imshow(
