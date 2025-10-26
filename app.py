@@ -1,17 +1,28 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
+import requests
+from io import StringIO
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import PassiveAggressiveClassifier, LogisticRegression
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, confusion_matrix
-from sklearn.datasets import load_iris, load_wine, load_breast_cancer
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, confusion_matrix, roc_curve, auc
+from sklearn.datasets import load_iris, load_wine
 import plotly.express as px
-import numpy as np
+import plotly.graph_objects as go
+from sklearn.preprocessing import label_binarize
 
-# --- Helper Function ---
+# --- Helper Functions ---
+def load_dataset_from_url(url):
+    response = requests.get(url)
+    if response.status_code == 200:
+        return pd.read_csv(StringIO(response.text))
+    else:
+        st.error(f"Failed to download dataset from {url}")
+        return None
+
 def plot_confusion_matrix(cm, labels, model_name):
-    """Creates a heatmap for confusion matrix."""
     fig = px.imshow(
         cm,
         text_auto=True,
@@ -23,35 +34,35 @@ def plot_confusion_matrix(cm, labels, model_name):
     fig.update_layout(title_text=f"Confusion Matrix: {model_name}", title_x=0.5)
     return fig
 
-# --- Model Runner Function ---
-def run_analysis(dataset_choice, user_file, target_column, selected_models):
-    df = None
-    summary_output = ""
-    plots = {}
+def plot_feature_importance(model, X, model_name):
+    if hasattr(model, "feature_importances_"):
+        importance = model.feature_importances_
+        fig = go.Figure([go.Bar(x=X.columns, y=importance)])
+        fig.update_layout(title=f"Feature Importance: {model_name}", xaxis_title="Features", yaxis_title="Importance")
+        return fig
+    return None
 
-    # Load dataset
-    if dataset_choice == "Iris":
-        data = load_iris(as_frame=True)
-        df = pd.concat([data.data, data.target.rename("target")], axis=1)
-        target_column = "target"
-    elif dataset_choice == "Wine":
-        data = load_wine(as_frame=True)
-        df = pd.concat([data.data, data.target.rename("target")], axis=1)
-        target_column = "target"
-    elif dataset_choice == "Breast Cancer":
-        data = load_breast_cancer(as_frame=True)
-        df = pd.concat([data.data, data.target.rename("target")], axis=1)
-        target_column = "target"
-    elif dataset_choice == "Upload your own":
-        if user_file is None:
-            st.warning("Please upload a CSV file.")
-            return None, None, None, None
-        df = pd.read_csv(user_file)
+def plot_metrics_bar(metrics_df):
+    fig = px.bar(metrics_df.melt(id_vars="Model"), 
+                 x="Model", y="value", color="variable", barmode="group",
+                 title="Model Performance Metrics Comparison")
+    return fig
 
-    if target_column not in df.columns:
-        st.error(f"Target column '{target_column}' not found in dataset.")
-        return None, None, None, None
+def plot_roc_curve(model, X_test, y_test, model_name):
+    if hasattr(model, "predict_proba") and len(np.unique(y_test)) == 2:
+        y_score = model.predict_proba(X_test)[:,1]
+        fpr, tpr, _ = roc_curve(y_test, y_score)
+        roc_auc = auc(fpr, tpr)
+        fig = px.area(
+            x=fpr, y=tpr,
+            title=f"ROC Curve: {model_name} (AUC={roc_auc:.2f})",
+            labels={"x":"False Positive Rate", "y":"True Positive Rate"}
+        )
+        return fig
+    return None
 
+# --- Main Analysis Function ---
+def run_analysis(df, target_column, selected_models):
     X = df.drop(columns=[target_column])
     y = df[target_column]
 
@@ -63,17 +74,18 @@ def run_analysis(dataset_choice, user_file, target_column, selected_models):
         X, y, test_size=0.2, random_state=42
     )
 
-    # Model dictionary
     model_map = {
         "Passive-Aggressive": PassiveAggressiveClassifier(max_iter=1000, random_state=42),
-        "SVM": SVC(gamma="auto"),
+        "SVM": SVC(probability=True, gamma="auto"),
         "Random Forest": RandomForestClassifier(n_estimators=100, random_state=42),
         "Logistic Regression": LogisticRegression(max_iter=1000),
     }
 
     performance_data = []
+    plots = {}
+    feature_plots = {}
+    roc_plots = {}
 
-    # Train and evaluate models
     for name in selected_models:
         model = model_map.get(name)
         try:
@@ -88,46 +100,61 @@ def run_analysis(dataset_choice, user_file, target_column, selected_models):
             performance_data.append(
                 {
                     "Model": name,
-                    "Accuracy": f"{accuracy:.4f}",
-                    "Precision": f"{precision:.4f}",
-                    "Recall": f"{recall:.4f}",
-                    "F1-Score": f"{f1:.4f}",
+                    "Accuracy": round(accuracy, 4),
+                    "Precision": round(precision, 4),
+                    "Recall": round(recall, 4),
+                    "F1-Score": round(f1, 4),
                 }
             )
 
             cm = confusion_matrix(y_test, y_pred, labels=np.unique(y))
-            fig = plot_confusion_matrix(cm, np.unique(y), name)
-            plots[name] = fig
+            plots[name] = plot_confusion_matrix(cm, np.unique(y), name)
+
+            if name == "Random Forest":
+                feature_plots[name] = plot_feature_importance(model, X, name)
+
+            if len(np.unique(y)) == 2:
+                roc_fig = plot_roc_curve(model, X_test, y_test, name)
+                if roc_fig:
+                    roc_plots[name] = roc_fig
 
         except Exception as e:
             st.error(f"Error training {name}: {e}")
 
-    if not performance_data:
-        summary_output = "No models selected."
-    else:
-        best_model = max(performance_data, key=lambda x: float(x["F1-Score"]))
-        summary_output = f"🏆 **Best Model:** {best_model['Model']} (F1 = {best_model['F1-Score']})"
+    best_model = max(performance_data, key=lambda x: x["F1-Score"])
+    summary_output = f"🏆 **Best Model:** {best_model['Model']} (F1 = {best_model['F1-Score']})"
 
-    return df.head(), pd.DataFrame(performance_data), plots, summary_output
+    metrics_df = pd.DataFrame(performance_data)
+    metrics_bar_fig = plot_metrics_bar(metrics_df)
 
-# --- Streamlit App Layout ---
+    return metrics_df, plots, feature_plots, roc_plots, summary_output, metrics_bar_fig
+
+# --- Streamlit Layout ---
 st.set_page_config(page_title="ML Model Comparison", layout="wide")
 st.title("✨ Machine Learning Model Comparison Tool")
-st.markdown("Easily compare multiple ML models on standard or custom datasets.")
+st.markdown("Compare multiple classification models with rich visualizations.")
 
-# Sidebar Configuration
+# Sidebar
 st.sidebar.header("⚙️ Configuration")
 dataset_choice = st.sidebar.radio(
     "Select Dataset",
-    ["Iris", "Wine", "Breast Cancer", "Upload your own"],
-    index=0,
+    ["Iris", "Wine", "Heart Disease"]
 )
 
-user_file = None
-if dataset_choice == "Upload your own":
-    user_file = st.sidebar.file_uploader("Upload your CSV file", type=["csv"])
-
-target_column = st.sidebar.text_input("Target Column Name", value="target")
+if dataset_choice == "Iris":
+    from sklearn.datasets import load_iris
+    data = load_iris(as_frame=True)
+    df = pd.concat([data.data, data.target.rename("target")], axis=1)
+    target_column = "target"
+elif dataset_choice == "Wine":
+    from sklearn.datasets import load_wine
+    data = load_wine(as_frame=True)
+    df = pd.concat([data.data, data.target.rename("target")], axis=1)
+    target_column = "target"
+elif dataset_choice == "Heart Disease":
+    heart_url = "https://raw.githubusercontent.com/rahulmidha/Heart-Disease-UCI-Dataset/main/heart.csv"
+    df = load_dataset_from_url(heart_url)
+    target_column = "target"
 
 selected_models = st.sidebar.multiselect(
     "Select Models",
@@ -136,24 +163,29 @@ selected_models = st.sidebar.multiselect(
 )
 
 if st.sidebar.button("🚀 Run Analysis"):
-    with st.spinner("Training models... Please wait."):
-        preview, metrics_df, plots, summary = run_analysis(
-            dataset_choice, user_file, target_column, selected_models
-        )
+    metrics_df, plots, feature_plots, roc_plots, summary, metrics_bar_fig = run_analysis(df, target_column, selected_models)
+    
+    st.success(summary)
 
-    if preview is not None:
-        st.success(summary)
+    with st.expander("📊 Dataset Preview"):
+        st.dataframe(df.head())
 
-        with st.expander("📊 Dataset Preview"):
-            st.dataframe(preview)
+    with st.expander("📈 Model Performance Metrics", expanded=True):
+        st.dataframe(metrics_df)
+        st.plotly_chart(metrics_bar_fig, use_container_width=True)
 
-        with st.expander("📈 Model Performance Metrics", expanded=True):
-            st.dataframe(metrics_df)
+    with st.expander("🧩 Confusion Matrices", expanded=True):
+        cols = st.columns(2)
+        for i, (name, fig) in enumerate(plots.items()):
+            if fig:
+                cols[i % 2].plotly_chart(fig, use_container_width=True)
 
-        with st.expander("🧩 Confusion Matrices", expanded=True):
-            cols = st.columns(2)
-            for i, (name, fig) in enumerate(plots.items()):
-                if fig is not None:
-                    cols[i % 2].plotly_chart(fig, use_container_width=True)
-else:
-    st.info("👈 Configure your options in the sidebar and click **Run Analysis**.")
+    with st.expander("🌟 Feature Importance (Random Forest)"):
+        for fig in feature_plots.values():
+            if fig:
+                st.plotly_chart(fig, use_container_width=True)
+
+    if roc_plots:
+        with st.expander("📊 ROC Curves (Binary Classification)", expanded=True):
+            for fig in roc_plots.values():
+                st.plotly_chart(fig, use_container_width=True)
