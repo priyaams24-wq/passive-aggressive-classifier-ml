@@ -1,8 +1,8 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import requests
 from io import StringIO
+import requests
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import PassiveAggressiveClassifier, LogisticRegression
 from sklearn.svm import SVC
@@ -21,12 +21,9 @@ def load_heart_data():
             'age', 'sex', 'cp', 'trestbps', 'chol', 'fbs', 'restecg', 'thalach',
             'exang', 'oldpeak', 'slope', 'ca', 'thal', 'target'
         ]
-        # Replace '?' with NaN and drop rows with missing values
         df.replace('?', np.nan, inplace=True)
         df.dropna(inplace=True)
-        # Convert all columns to numeric
         df = df.apply(pd.to_numeric)
-        # Binary target: 0 = no disease, 1 = disease
         df['target'] = df['target'].apply(lambda x: 0 if x == 0 else 1)
         return df
     except Exception as e:
@@ -140,19 +137,32 @@ def run_analysis(df, target_column, selected_models):
 st.set_page_config(page_title="ML Model Comparison", layout="wide")
 st.title("✨ ML Model Comparison Tool")
 
-dataset_choice = st.sidebar.radio("Select Dataset", ["Iris", "Wine", "Heart Disease"])
+dataset_choice = st.sidebar.radio(
+    "Select Dataset",
+    ["Iris", "Wine", "Heart Disease", "Upload your own"]
+)
+
+user_file = None
+target_column = "target"
+df = None
 
 if dataset_choice == "Iris":
     data = load_iris(as_frame=True)
     df = pd.concat([data.data, data.target.rename("target")], axis=1)
-    target_column = "target"
 elif dataset_choice == "Wine":
     data = load_wine(as_frame=True)
     df = pd.concat([data.data, data.target.rename("target")], axis=1)
-    target_column = "target"
 elif dataset_choice == "Heart Disease":
     df = load_heart_data()
-    target_column = "target"
+elif dataset_choice == "Upload your own":
+    user_file = st.sidebar.file_uploader("Upload CSV file", type=["csv"])
+    target_column = st.sidebar.text_input("Enter target column name", value="target")
+    if user_file:
+        try:
+            df = pd.read_csv(user_file)
+        except Exception as e:
+            st.error(f"Failed to load uploaded file: {e}")
+            df = None
 
 selected_models = st.sidebar.multiselect(
     "Select Models",
